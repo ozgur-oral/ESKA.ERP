@@ -1,0 +1,28 @@
+{
+  "name": "eska-erp",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ESKA.ERP - Enterprise Resource Planning System",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces",
+    "contract:emit": "prisma contract emit"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@prisma/orm-postgres": "^8.0.0-rc.10",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@prisma/cli-engine": "^0.3.0",
+    "@types/node": "^22.20.2",
+    "prisma": "^8.0.0-rc.14"
+  }
+}

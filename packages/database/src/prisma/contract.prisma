@@ -1,0 +1,82 @@
+// use prisma-8
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  UPDATE
+  DELETE
+  EXPORT
+  ADMIN
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  email        String     @unique
+  username     String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  phone        String?
+  status       UserStatus @default(ACTIVE)
+
+  roles        UserRole[]
+
+  createdAt    DateTime   @default(now())
+  updatedAt temporal.updatedAt()
+}
+
+model Role {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(false)
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  createdAt   DateTime         @default(now())
+  updatedAt temporal.updatedAt()
+}
+
+model UserRole {
+  id      Int  @id @default(autoincrement())
+  userId  Int
+  roleId  Int
+
+  user    User @relation(fields: [userId], references: [id])
+  role    Role @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, roleId])
+}
+
+model Module {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique
+  code        String           @unique
+  description String?
+  isActive   Boolean          @default(true)
+  sortOrder   Int              @default(0)
+
+  permissions RolePermission[]
+
+  createdAt   DateTime         @default(now())
+  updatedAt temporal.updatedAt()
+}
+
+model RolePermission {
+  id         Int              @id @default(autoincrement())
+  roleId     Int
+  moduleId   Int
+  action     PermissionAction
+
+  role       Role             @relation(fields: [roleId], references: [id])
+  module     Module           @relation(fields: [moduleId], references: [id])
+
+  @@unique([roleId, moduleId, action])
+}
