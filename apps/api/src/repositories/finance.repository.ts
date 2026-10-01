@@ -15,13 +15,43 @@ export async function syncFinanceDocuments(){
       ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
     `);
     await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-SRV-'||s.id,'CUSTOMER',s."customerId",'RECEIVABLE','SERVICE',s.id,
-             'Teknik servis '||s."serviceNo",'TRY',s."grandTotal",(COALESCE(s."completedAt",s."createdAt")::date + 7)
-      FROM "serviceRecord" s
-      WHERE s."grandTotal">0 AND s."serviceType"='PAID' AND s.status<>'CANCELLED'
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
+  INSERT INTO "financeDocument"
+  (
+    "documentNo",
+    "partyType",
+    "customerId",
+    direction,
+    "sourceType",
+    "sourceId",
+    description,
+    currency,
+    amount,
+    "dueDate"
+  )
+  SELECT
+    'FIN-SO-' || o.id,
+    'CUSTOMER',
+    o."customerId",
+    'RECEIVABLE',
+    'SALES_ORDER',
+    o.id,
+    'Satış siparişi ' || o."orderNo",
+    o.currency,
+    o."grandTotal",
+    (o."deliveredAt"::date + c."paymentTermDays")
+  FROM "salesOrder" o
+  JOIN "customer" c
+    ON c.id = o."customerId"
+  WHERE o.status = 'DELIVERED'
+    AND o."deliveredAt" IS NOT NULL
+    AND o."grandTotal" > 0
+  ON CONFLICT ("sourceType","sourceId")
+  DO UPDATE SET
+    amount = EXCLUDED.amount,
+    description = EXCLUDED.description,
+    "dueDate" = EXCLUDED."dueDate",
+    "updatedAt" = now()
+`);
     await c.query(`
       INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
       SELECT 'FIN-CORS-'||s.id,'CUSTOMER',s."customerId",'RECEIVABLE','CORS_SUBSCRIPTION',s.id,
@@ -101,9 +131,37 @@ export async function settleDocument(documentId:number,input:any,user?:any){
     const amount=Number(input.amount);
     if(!amount||amount<=0||amount>remaining+0.001)throw new Error(`Tutar 0'dan büyük ve kalan ${remaining.toFixed(2)} tutarını aşmayacak şekilde olmalıdır.`);
     const expected=d.direction==='RECEIVABLE'?'RECEIPT':'PAYMENT';
+let createdByName: string | null = null;
+
+if (user?.id) {
+  const actor = (
+    await c.query<any>(
+      `
+      SELECT
+        "firstName",
+        "lastName",
+        username
+      FROM "user"
+      WHERE id=$1
+      `,
+      [Number(user.id)]
+    )
+  ).rows[0];
+
+  if (actor) {
+    createdByName =
+      [actor.firstName, actor.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() ||
+      actor.username ||
+      null;
+  }
+}
     const t=(await c.query<any>(`INSERT INTO "financeTransaction" ("transactionNo",type,"accountId","partyType","customerId","supplierId",currency,amount,description,"transactionDate","createdBy","createdByName")
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,[
-        nextNo(expected==='RECEIPT'?'TAH':'ODM'),expected,Number(input.accountId),d.partyType,d.customerId,d.supplierId,d.currency,amount,input.description||d.description,input.transactionDate||new Date().toISOString().slice(0,10),user?.id||null,user?`${user.firstName} ${user.lastName}`:null
+        nextNo(expected==='RECEIPT'?'TAH':'ODM'),expected,Number(input.accountId),d.partyType,d.customerId,d.supplierId,d.currency,amount,input.description||d.description,input.transactionDate||new Date().toISOString().slice(0,10),user?.id || null,
+createdByName
       ])).rows[0];
     await c.query(`INSERT INTO "financeAllocation" ("transactionId","documentId",amount) VALUES($1,$2,$3)`,[t.id,documentId,amount]);
     const paid=Number(d.paidAmount)+amount;
