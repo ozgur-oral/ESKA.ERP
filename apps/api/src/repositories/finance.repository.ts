@@ -2,95 +2,304 @@ import { pool, query } from "../db/pool.js";
 
 const nextNo=(prefix:string)=>`${prefix}-${new Date().getFullYear()}-${Date.now().toString().slice(-7)}`;
 
-export async function syncFinanceDocuments(){
-  const c=await pool.connect();
-  try{
-    await c.query("BEGIN");
-    await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-SO-'||o.id,'CUSTOMER',o."customerId",'RECEIVABLE','SALES_ORDER',o.id,
-             'Satış siparişi '||o."orderNo",o.currency,o."grandTotal",(o."createdAt"::date + c."paymentTermDays")
-      FROM "salesOrder" o JOIN "customer" c ON c.id=o."customerId"
-      WHERE o.status<>'CANCELLED' AND o."grandTotal">0
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
-    await c.query(`
-  INSERT INTO "financeDocument"
-  (
-    "documentNo",
-    "partyType",
-    "customerId",
-    direction,
-    "sourceType",
-    "sourceId",
-    description,
-    currency,
-    amount,
-    "dueDate"
-  )
-  SELECT
-    'FIN-SO-' || o.id,
-    'CUSTOMER',
-    o."customerId",
-    'RECEIVABLE',
-    'SALES_ORDER',
-    o.id,
-    'Satış siparişi ' || o."orderNo",
-    o.currency,
-    o."grandTotal",
-    (o."deliveredAt"::date + c."paymentTermDays")
-  FROM "salesOrder" o
-  JOIN "customer" c
-    ON c.id = o."customerId"
-  WHERE o.status = 'DELIVERED'
-    AND o."deliveredAt" IS NOT NULL
-    AND o."grandTotal" > 0
-  ON CONFLICT ("sourceType","sourceId")
-  DO UPDATE SET
-    amount = EXCLUDED.amount,
-    description = EXCLUDED.description,
-    "dueDate" = EXCLUDED."dueDate",
-    "updatedAt" = now()
-`);
-    await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-CORS-'||s.id,'CUSTOMER',s."customerId",'RECEIVABLE','CORS_SUBSCRIPTION',s.id,
-             'CORS aboneliği '||s."subscriptionNo",s.currency,s.amount,s."startDate"
-      FROM "corsSubscription" s WHERE s.status<>'CANCELLED' AND s.amount>0
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
-    await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-CRN-'||r.id,'CUSTOMER',s."customerId",'RECEIVABLE','CORS_RENEWAL',r.id,
-             'CORS yenileme '||s."subscriptionNo",s.currency,r.amount,r."createdAt"::date
-      FROM "corsSubscriptionRenewal" r JOIN "corsSubscription" s ON s.id=r."subscriptionId" WHERE r.amount>0
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
-    await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","customerId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-RNT-'||r.id,'CUSTOMER',r."customerId",'RECEIVABLE','RENTAL',r.id,
-             'Kiralama '||r."rentalNo",r.currency,
-             CASE WHEN r.type='DEMO' OR r."billingPeriod"='FREE' THEN COALESCE(x.damage,0)
-                  WHEN r."billingPeriod"='DAILY' THEN GREATEST(1,(r."actualReturnDate"-r."startDate")+1)*r."dailyRate"+COALESCE(x.damage,0)
-                  WHEN r."billingPeriod"='MONTHLY' THEN GREATEST(1,CEIL(GREATEST(1,(r."actualReturnDate"-r."startDate")+1)::numeric/30))*r."monthlyRate"+COALESCE(x.damage,0)
-                  ELSE r."fixedAmount"+COALESCE(x.damage,0) END,
-             r."actualReturnDate"
-      FROM "rentalAgreement" r LEFT JOIN (SELECT "rentalId",SUM("damageCharge") damage FROM "rentalItem" GROUP BY "rentalId") x ON x."rentalId"=r.id
-      WHERE r.status='RETURNED' AND (r.type<>'DEMO' OR COALESCE(x.damage,0)>0)
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
-    await c.query(`
-      INSERT INTO "financeDocument" ("documentNo","partyType","supplierId",direction,"sourceType","sourceId",description,currency,amount,"dueDate")
-      SELECT 'FIN-PO-'||o.id,'SUPPLIER',o."supplierId",'PAYABLE','PURCHASE_ORDER',o.id,
-             'Satın alma siparişi '||o."orderNo",o.currency,o."grandTotal",COALESCE(o."expectedAt",o."createdAt"::date)+30
-      FROM "purchaseOrder" o WHERE o.status<>'CANCELLED' AND o."grandTotal">0
-      ON CONFLICT ("sourceType","sourceId") DO UPDATE SET amount=EXCLUDED.amount,description=EXCLUDED.description,"updatedAt"=now()
-    `);
-    await c.query(`UPDATE "financeDocument" SET status=CASE WHEN "paidAmount">=amount THEN 'PAID' WHEN "paidAmount">0 THEN 'PARTIAL' ELSE 'OPEN' END WHERE status<>'CANCELLED'`);
-    await c.query("COMMIT");
-  }catch(e){await c.query("ROLLBACK");throw e}finally{c.release()}
-}
+export async function syncFinanceDocuments() {
+  const c = await pool.connect();
 
+  try {
+    await c.query("BEGIN");
+
+    /*
+     * SALES ORDER → FINANCE DOCUMENT
+     *
+     * Satış siparişi yalnızca gerçekten teslim edildiğinde
+     * müşterinin cari hesabında alacak oluşturmalıdır.
+     *
+     * Eski sistem tarafından OPEN vb. durumdaki siparişler için
+     * oluşturulmuş finans belgelerini güvenli şekilde temizliyoruz.
+     *
+     * Tahsilat yapılmış veya financeAllocation kaydı bulunan
+     * belgeler tarihsel finans bütünlüğünü korumak amacıyla silinmez.
+     */
+    await c.query(`
+      DELETE FROM "financeDocument" d
+      USING "salesOrder" o
+      WHERE d."sourceType" = 'SALES_ORDER'
+        AND d."sourceId" = o.id
+        AND (
+          o.status <> 'DELIVERED'
+          OR o."deliveredAt" IS NULL
+        )
+        AND d."paidAmount" = 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "financeAllocation" a
+          WHERE a."documentId" = d.id
+        )
+    `);
+
+    /*
+     * Yalnızca teslim edilmiş satış siparişleri
+     * müşterinin cari hesabında alacak oluşturur.
+     *
+     * Vade tarihi:
+     * teslim tarihi + müşterinin ödeme vadesi
+     */
+    await c.query(`
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "customerId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-SO-' || o.id,
+        'CUSTOMER',
+        o."customerId",
+        'RECEIVABLE',
+        'SALES_ORDER',
+        o.id,
+        'Satış siparişi ' || o."orderNo",
+        o.currency,
+        o."grandTotal",
+        (o."deliveredAt"::date + c."paymentTermDays")
+      FROM "salesOrder" o
+      JOIN "customer" c
+        ON c.id = o."customerId"
+      WHERE o.status = 'DELIVERED'
+        AND o."deliveredAt" IS NOT NULL
+        AND o."grandTotal" > 0
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "dueDate" = EXCLUDED."dueDate",
+        "updatedAt" = now()
+    `);
+
+    /*
+     * CORS abonelikleri
+     */
+    await c.query(`
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "customerId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-CORS-' || s.id,
+        'CUSTOMER',
+        s."customerId",
+        'RECEIVABLE',
+        'CORS_SUBSCRIPTION',
+        s.id,
+        'CORS aboneliği ' || s."subscriptionNo",
+        s.currency,
+        s.amount,
+        s."startDate"
+      FROM "corsSubscription" s
+      WHERE s.status <> 'CANCELLED'
+        AND s.amount > 0
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "updatedAt" = now()
+    `);
+
+    /*
+     * CORS yenilemeleri
+     */
+    await c.query(`
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "customerId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-CRN-' || r.id,
+        'CUSTOMER',
+        s."customerId",
+        'RECEIVABLE',
+        'CORS_RENEWAL',
+        r.id,
+        'CORS yenileme ' || s."subscriptionNo",
+        s.currency,
+        r.amount,
+        r."createdAt"::date
+      FROM "corsSubscriptionRenewal" r
+      JOIN "corsSubscription" s
+        ON s.id = r."subscriptionId"
+      WHERE r.amount > 0
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "updatedAt" = now()
+    `);
+
+    /*
+     * Kiralamalar
+     */
+    await c.query(`
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "customerId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-RNT-' || r.id,
+        'CUSTOMER',
+        r."customerId",
+        'RECEIVABLE',
+        'RENTAL',
+        r.id,
+        'Kiralama ' || r."rentalNo",
+        r.currency,
+        CASE
+          WHEN r.type = 'DEMO'
+            OR r."billingPeriod" = 'FREE'
+            THEN COALESCE(x.damage, 0)
+
+          WHEN r."billingPeriod" = 'DAILY'
+            THEN
+              GREATEST(
+                1,
+                (r."actualReturnDate" - r."startDate") + 1
+              ) * r."dailyRate"
+              + COALESCE(x.damage, 0)
+
+          WHEN r."billingPeriod" = 'MONTHLY'
+            THEN
+              GREATEST(
+                1,
+                CEIL(
+                  GREATEST(
+                    1,
+                    (r."actualReturnDate" - r."startDate") + 1
+                  )::numeric / 30
+                )
+              ) * r."monthlyRate"
+              + COALESCE(x.damage, 0)
+
+          ELSE
+            r."fixedAmount" + COALESCE(x.damage, 0)
+        END,
+        r."actualReturnDate"
+      FROM "rentalAgreement" r
+      LEFT JOIN (
+        SELECT
+          "rentalId",
+          SUM("damageCharge") AS damage
+        FROM "rentalItem"
+        GROUP BY "rentalId"
+      ) x
+        ON x."rentalId" = r.id
+      WHERE r.status = 'RETURNED'
+        AND (
+          r.type <> 'DEMO'
+          OR COALESCE(x.damage, 0) > 0
+        )
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "updatedAt" = now()
+    `);
+
+    /*
+     * Satın alma siparişleri
+     */
+    await c.query(`
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "supplierId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-PO-' || o.id,
+        'SUPPLIER',
+        o."supplierId",
+        'PAYABLE',
+        'PURCHASE_ORDER',
+        o.id,
+        'Satın alma siparişi ' || o."orderNo",
+        o.currency,
+        o."grandTotal",
+        COALESCE(
+          o."expectedAt",
+          o."createdAt"::date
+        ) + 30
+      FROM "purchaseOrder" o
+      WHERE o.status <> 'CANCELLED'
+        AND o."grandTotal" > 0
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "updatedAt" = now()
+    `);
+
+    /*
+     * Finans belgelerinin ödeme durumlarını güncelle.
+     */
+    await c.query(`
+      UPDATE "financeDocument"
+      SET status =
+        CASE
+          WHEN "paidAmount" >= amount THEN 'PAID'
+          WHEN "paidAmount" > 0 THEN 'PARTIAL'
+          ELSE 'OPEN'
+        END
+      WHERE status <> 'CANCELLED'
+    `);
+
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK");
+    throw e;
+  } finally {
+    c.release();
+  }
+}
 export async function summary(){
   await syncFinanceDocuments();
   const r=await query<any>(`SELECT
