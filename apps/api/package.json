@@ -1,30 +1,29 @@
 {
   "name": "api",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx watch src/index.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "devDependencies": {
-    "@types/express": "^5.0.6",
-    "@types/node": "^20.19.43",
-    "tsx": "^4.23.13",
-    "typescript": "^5.9.3"
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "db:business": "tsx src/scripts/migrate-business.ts",
+    "verify:static": "tsx src/scripts/verify-static.ts",
+    "verify:release": "tsx src/scripts/verify-release.ts",
+    "test:release": "npm run verify:static && npm run verify:release && npm run typecheck"
   },
   "dependencies": {
-    "@eska/database": "^1.0.0",
-    "@prisma/adapter-pg": "^7.10.0",
-    "@prisma/client": "^7.10.0",
-    "@prisma/orm-postgres": "^8.0.0-rc.10",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.19.43",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
   }
 }

@@ -1,0 +1,4 @@
+import { findPublicUserById, listPublicUsers } from "../auth/service.js";import { createWorkTask,getWorkTask,listWorkTasks,syncOverdueNotifications,updateWorkTask,workTaskSummary } from "../repositories/work-task.repository.js";
+export const tasks=listWorkTasks;export const task=getWorkTask;export const taskSummary=workTaskSummary;export const changeTask=updateWorkTask;export{syncOverdueNotifications};
+export async function openTask(input:any,userId:number){const creator=await findPublicUserById(userId);return createWorkTask(input,{id:userId,name:creator?`${creator.firstName} ${creator.lastName}`:`Kullanıcı #${userId}`,department:creator?.department})}
+export async function taskAssignees(){const users=await listPublicUsers();return users.filter(x=>x.status==='ACTIVE').map(x=>({id:x.id,name:`${x.firstName} ${x.lastName}`,department:x.department,role:x.role}))}

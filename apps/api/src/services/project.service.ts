@@ -1,0 +1,10 @@
+import { addAssignment,addMilestone,createProject,createTask,findProjectById,listCompanies,listProjects,projectSummary,updateTask } from "../repositories/project.repository.js";
+export const getProjectCompanies=()=>listCompanies();
+export const getProjectSummary=()=>projectSummary();
+export const getProjects=(f:any)=>listProjects(f);
+export const getProject=(id:string)=>findProjectById(Number(id));
+export const openProject=(input:any,userId?:number)=>createProject({...input,customerId:input.customerId?Number(input.customerId):null,ownerCompanyId:input.ownerCompanyId?Number(input.ownerCompanyId):null,acPowerMw:input.acPowerMw!==undefined&&input.acPowerMw!==''?Number(input.acPowerMw):null,dcPowerMwp:input.dcPowerMwp!==undefined&&input.dcPowerMwp!==''?Number(input.dcPowerMwp):null,latitude:input.latitude!==undefined&&input.latitude!==''?Number(input.latitude):null,longitude:input.longitude!==undefined&&input.longitude!==''?Number(input.longitude):null},userId);
+export const addProjectTask=(id:string,input:any,userId?:number)=>createTask(Number(id),input,userId);
+export const changeProjectTask=(taskId:string,input:any,userId?:number)=>updateTask(Number(taskId),input,userId);
+export const addProjectAssignment=(id:string,input:any)=>addAssignment(Number(id),{...input,userId:input.userId?Number(input.userId):null,homeCompanyId:input.homeCompanyId?Number(input.homeCompanyId):null,assignedCompanyId:input.assignedCompanyId?Number(input.assignedCompanyId):null});
+export const addProjectMilestone=(id:string,input:any)=>addMilestone(Number(id),input);

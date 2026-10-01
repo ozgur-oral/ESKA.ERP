@@ -1,0 +1,7 @@
+import type{Request,Response}from"express";import*as crm from"../services/crm.service.js";import{ok}from"../utils/http.js";import{recordAudit}from"../services/audit.service.js";
+export async function crmSummary(_q:Request,r:Response){return ok(r,await crm.summary())}
+export async function crmActivities(q:Request,r:Response){return ok(r,await crm.activities(q.query.customerId?Number(q.query.customerId):undefined))}
+export async function crmTimeline(q:Request,r:Response){return ok(r,await crm.customerTimeline(Number(q.params.id)))}
+export async function crmFollowUps(q:Request,r:Response){return ok(r,await crm.followUps(q.query.mine==='1'?q.auth?.userId:undefined))}
+export async function crmActivityCreate(q:Request,r:Response){if(!q.body?.customerId||!q.body?.type||!q.body?.subject)return r.status(400).json({success:false,message:"Müşteri, aktivite türü ve konu zorunludur."});const x=await crm.createActivity(q.body,q.auth?.userId);await recordAudit({action:"CREATE",module:"CRM",entityType:"crmActivity",entityId:x.id,entityLabel:x.subject,newValues:x});return r.status(201).json({success:true,data:x})}
+export async function crmNoteCreate(q:Request,r:Response){if(!q.body?.note)return r.status(400).json({success:false,message:"Not zorunludur."});const x=await crm.createNote(Number(q.params.id),String(q.body.note),Boolean(q.body.isPinned),q.auth?.userId);await recordAudit({action:"CREATE",module:"CRM",entityType:"crmCustomerNote",entityId:x.id,entityLabel:"Müşteri notu",newValues:x});return r.status(201).json({success:true,data:x})}

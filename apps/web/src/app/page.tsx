@@ -1,69 +1,12 @@
-import Image from "next/image";
-import styles from "./page.module.css";
-
-export default function Home() {
-  return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
-}
+"use client";
+import Link from "next/link";import {useEffect,useState} from "react";import {AppShell,Badge,Panel,PrimaryButton,SecondaryButton} from "@/components/app-shell";import {Icon} from "@/components/icon";import {api} from "@/lib/api";
+const money=(x:number)=>new Intl.NumberFormat("tr-TR",{style:"currency",currency:"TRY",maximumFractionDigits:0}).format(x||0);
+export default function DashboardPage(){const [d,setD]=useState<any>(null);useEffect(()=>{api.executiveDashboard().then(setD).catch(()=>{})},[]);const k=d?.kpis||{};
+ const cards=[["Bu Ay Satış",money(k.salesMonth),`${k.openQuotes||0} açık teklif`],["Açık Alacak",money(k.receivable),`${money(k.overdueReceivable)} gecikmiş`],["Aktif CORS",k.activeCors||0,`${k.corsExpiring||0} abonelik 30 gün içinde`],["Aktif Servis",k.activeService||0,`${k.agingService||0} kayıt 7+ gün`],["Açık Ticket",k.openTickets||0,`${k.slaBreached||0} SLA ihlali`],["Aktif Proje",k.activeProjects||0,`Ort. %${Math.round(k.projectProgress||0)} ilerleme`],["Açık Görev",k.openTasks||0,`${k.overdueTasks||0} gecikmiş`],["Kritik Stok",k.criticalStock||0,`${k.overdueRentals||0} gecikmiş kiralama`]];
+ const max=Math.max(...(d?.salesTrend||[]).map((x:any)=>x.total),1);
+ return <AppShell title="Yönetici Operasyon Merkezi" subtitle="ESKA Grup satış, finans ve operasyon KPI'ları tek ekranda." actions={<><SecondaryButton><Icon name="calendar" size={15}/> Canlı veriler</SecondaryButton><PrimaryButton><Icon name="plus" size={15}/> Hızlı İşlem</PrimaryButton></>}>
+ <div className="stats-grid">{cards.map(([a,b,c]:any)=><div className="stat-card" key={a}><div><span>{a}</span><strong>{b}</strong></div><Badge tone={String(c).includes("gecik")||String(c).includes("ihlali")?"warning":"success"}>{c}</Badge></div>)}</div>
+ <div className="dashboard-grid"><Panel title="12 Aylık Onaylı Satış Trendi" action={<Link className="text-link" href="/reports">Raporlar <Icon name="arrow" size={14}/></Link>}><div className="chart"><div className="chart-grid"/>{(d?.salesTrend||[]).map((x:any)=><div className="bar-col" key={x.month}><div className="bar" title={money(x.total)} style={{height:`${Math.max(3,(x.total/max)*100)}%`}}/><span>{x.month.slice(5)}</span></div>)}</div></Panel>
+ <Panel title="Yönetim Riskleri"><div className="list-stack">{[["Gecikmiş alacak",money(k.overdueReceivable),k.overdueReceivable],["SLA ihlali",`${k.slaBreached||0} ticket`,k.slaBreached],["Gecikmiş görev",`${k.overdueTasks||0} görev`,k.overdueTasks],["Kritik stok",`${k.criticalStock||0} ürün`,k.criticalStock],["Gecikmiş kiralama",`${k.overdueRentals||0} kayıt`,k.overdueRentals]].map(([a,b,v]:any)=><div className="activity-row" key={a}><span className="number-dot">!</span><div><strong>{a}</strong><small>{b}</small></div><Badge tone={v>0?"warning":"success"}>{v>0?"Takip":"Normal"}</Badge></div>)}</div></Panel></div>
+ <Panel title="Hızlı Yönetim Erişimi"><div className="quick-actions"><Link href="/finance/aging" className="quick-action"><Icon name="chart"/><span><strong>Alacak Yaşlandırma</strong><small>Riskli alacakları incele</small></span></Link><Link href="/support" className="quick-action"><Icon name="help"/><span><strong>SLA Takibi</strong><small>Destek performansı</small></span></Link><Link href="/projects" className="quick-action"><Icon name="briefcase"/><span><strong>Projeler</strong><small>İlerleme ve saha işleri</small></span></Link><Link href="/audit" className="quick-action"><Icon name="shield"/><span><strong>Sistem Hareketleri</strong><small>Audit kayıtlarını incele</small></span></Link></div></Panel>
+ </AppShell>}

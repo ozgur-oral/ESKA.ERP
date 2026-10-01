@@ -1,0 +1,3 @@
+import * as repo from "../repositories/finance.repository.js";
+export const getSummary=repo.summary;export const listDocuments=repo.documents;export const listAccounts=repo.accounts;export const addAccount=repo.createAccount;export const listTransactions=repo.transactions;export const settle=repo.settleDocument;export const customerLedger=(id:number)=>repo.partyLedger("customer",id);export const supplierLedger=(id:number)=>repo.partyLedger("supplier",id);export const sync=repo.syncFinanceDocuments;
+export const getCustomerRisk=(id:number,proposed=0)=>repo.customerRisk(id,proposed);export const getReceivableAging=repo.receivableAging;export const syncRiskNotifications=repo.syncCreditRiskNotifications;

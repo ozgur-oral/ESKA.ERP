@@ -1,0 +1,2 @@
+import { AppShell, Panel } from "@/components/app-shell"; import { Icon } from "@/components/icon";
+export default function Page(){return <AppShell title="Sistem Ayarları" subtitle="ERP genel yapılandırmasını yönetin."><Panel title="Modül Hazır"><div className="coming-soon"><div><Icon name="gear" size={30}/></div><h2>Sistem Ayarları</h2><p>Bu ekran uygulama kabuğuna bağlandı. Sonraki backend turunda gerçek veri, filtreler, yetkiler ve işlem akışları eklenecek.</p></div></Panel></AppShell>}

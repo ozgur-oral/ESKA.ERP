@@ -1,0 +1,4 @@
+import * as repo from "../repositories/purchasing.repository.js";
+export const listSuppliers=repo.findSuppliers;export const addSupplier=repo.createSupplier;export const listPurchaseRequests=repo.findRequests;export const addPurchaseRequest=repo.createRequest;export const setPurchaseRequestStatus=repo.updateRequestStatus;export const listPurchaseOrders=repo.findOrders;export const getPurchaseOrder=repo.findOrder;export const addPurchaseOrder=repo.createOrder;export const receivePurchaseOrder=repo.receiveOrder;export const listCriticalProducts=repo.criticalProducts;
+export const listSupplierQuotes=repo.findSupplierQuotes;export const addSupplierQuote=repo.createSupplierQuote;export const chooseSupplierQuote=repo.selectSupplierQuote;
+export const convertSupplierQuote=repo.convertSupplierQuoteToOrder;

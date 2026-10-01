@@ -1,0 +1,12 @@
+import * as repo from "../repositories/cors-operations.repository.js";
+export const getStationEvents=repo.listStationEvents;
+export const addStationEvent=repo.createStationEvent;
+export const getStationMaintenance=repo.listMaintenance;
+export const addStationMaintenance=repo.createMaintenance;
+export const setMaintenanceStatus=repo.updateMaintenanceStatus;
+export const getStationUptime=repo.getUptimeReport;
+export const getCorsRevenue=repo.getCorsRevenueReport;
+export const getNotifications=repo.listNotifications;
+export const getNotificationSummary=repo.notificationSummary;
+export const readNotification=repo.markNotificationRead;
+export const readAllNotifications=repo.markAllNotificationsRead;
