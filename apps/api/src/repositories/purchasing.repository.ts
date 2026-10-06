@@ -322,6 +322,83 @@ if (qty > remaining) {
     `${oi.name} için mal kabul miktarı kalan miktarı aşıyor.`
   );
 }const serials=Array.isArray(line.serialNumbers)?line.serialNumbers.map((x:any)=>String(x).trim()).filter(Boolean):[];if(oi.isSerialized&&serials.length!==qty)throw new Error(`${oi.name} için ${qty} adet seri numarası girilmelidir.`);await c.query(`INSERT INTO "goodsReceiptItem" ("receiptId","orderItemId","productId",quantity,"serialNumbers") VALUES ($1,$2,$3,$4,$5::jsonb)`,[receipt.id,oi.id,oi.productId,qty,JSON.stringify(serials)]);await c.query(`UPDATE "purchaseOrderItem" SET "receivedQuantity"="receivedQuantity"+$2 WHERE id=$1`,[oi.id,qty]);if(oi.isSerialized){for(const sn of serials){const d=(await c.query<any>(`INSERT INTO "inventoryDevice" ("productId","serialNumber",status) VALUES ($1,$2,'IN_STOCK') RETURNING id`,[oi.productId,sn])).rows[0];await c.query(`INSERT INTO "stockMovement" ("productId","deviceId",type,quantity,"referenceType","referenceId",notes,"createdBy") VALUES ($1,$2,'IN',1,'GOODS_RECEIPT',$3,$4,$5)`,[oi.productId,d.id,receipt.id,`Mal kabul ${receipt.receiptNo}`,user?.id??null]);}}else{await c.query(`UPDATE "product" SET "stockQuantity"="stockQuantity"+$2,"updatedAt"=now() WHERE id=$1`,[oi.productId,qty]);await c.query(`INSERT INTO "stockMovement" ("productId",type,quantity,"referenceType","referenceId",notes,"createdBy") VALUES ($1,'IN',$2,'GOODS_RECEIPT',$3,$4,$5)`,[oi.productId,qty,receipt.id,`Mal kabul ${receipt.receiptNo}`,user?.id??null]);}}
+/*
+ * Mal kabul edilen miktar kadar tedarikçi borcu oluştur.
+ *
+ * Finans belgesi sipariş oluşturulduğunda değil, fiziksel mal kabul
+ * gerçekleştikçe oluşur/güncellenir. Böylece kısmi mal kabullerde
+ * yalnızca teslim alınan miktarın finansal yükümlülüğü kaydedilir.
+ */
+const receivedFinance = (
+  await c.query<any>(
+    `
+    SELECT
+      COALESCE(
+        SUM(
+          i."receivedQuantity"
+          * i."unitPrice"
+          * (1 + i."vatRate" / 100.0)
+        ),
+        0
+      ) AS amount
+    FROM "purchaseOrderItem" i
+    WHERE i."orderId" = $1
+    `,
+    [orderId]
+  )
+).rows[0];
+
+const receivedFinanceAmount = Number(
+  receivedFinance?.amount ?? 0
+);
+
+if (receivedFinanceAmount > 0) {
+  await c.query(
+    `
+    INSERT INTO "financeDocument"
+    (
+      "documentNo",
+      "partyType",
+      "supplierId",
+      direction,
+      "sourceType",
+      "sourceId",
+      description,
+      currency,
+      amount,
+      "dueDate"
+    )
+    VALUES
+    (
+      $1,
+      'SUPPLIER',
+      $2,
+      'PAYABLE',
+      'PURCHASE_ORDER',
+      $3,
+      $4,
+      $5,
+      $6,
+      COALESCE($7::date, CURRENT_DATE) + 30
+    )
+    ON CONFLICT ("sourceType", "sourceId")
+    DO UPDATE SET
+      amount = EXCLUDED.amount,
+      description = EXCLUDED.description,
+      "dueDate" = EXCLUDED."dueDate",
+      "updatedAt" = now()
+    `,
+    [
+      `FIN-PO-${order.id}`,
+      order.supplierId,
+      order.id,
+      `Satın alma siparişi ${order.orderNo}`,
+      order.currency,
+      receivedFinanceAmount,
+      order.expectedAt ?? null,
+    ]
+  );
+}
 const left=(await c.query<any>(`SELECT COUNT(*)::int AS n FROM "purchaseOrderItem" WHERE "orderId"=$1 AND "receivedQuantity"<quantity`,[orderId])).rows[0].n;await c.query(`UPDATE "purchaseOrder" SET status=$2,"updatedAt"=now() WHERE id=$1`,[orderId,left===0?'RECEIVED':'PARTIAL']);await c.query('COMMIT');return receipt;}catch(e:any){
   await c.query('ROLLBACK');
 

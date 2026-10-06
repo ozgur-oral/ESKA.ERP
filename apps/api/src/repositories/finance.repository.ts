@@ -238,7 +238,43 @@ export async function syncFinanceDocuments() {
     `);
 
     /*
-     * Satın alma siparişleri
+     * PURCHASE ORDER → FINANCE DOCUMENT
+     *
+     * Satın alma siparişi oluşturulması tek başına tedarikçi borcu
+     * doğurmaz. Borç yalnızca fiziksel olarak mal kabul edilen miktar
+     * kadar oluşur.
+     *
+     * Eski sistem tarafından henüz mal kabulü yapılmamış siparişler
+     * için oluşturulmuş, ödeme veya allocation içermeyen finans
+     * belgelerini güvenli şekilde temizliyoruz.
+     */
+    await c.query(`
+      DELETE FROM "financeDocument" d
+      USING "purchaseOrder" o
+      WHERE d."sourceType" = 'PURCHASE_ORDER'
+        AND d."sourceId" = o.id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "purchaseOrderItem" i
+          WHERE i."orderId" = o.id
+            AND i."receivedQuantity" > 0
+        )
+        AND d."paidAmount" = 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "financeAllocation" a
+          WHERE a."documentId" = d.id
+        )
+    `);
+
+    /*
+     * Mal kabul edilmiş satın alma siparişleri için tedarikçi borcu.
+     *
+     * Borç tutarı:
+     * receivedQuantity × unitPrice × (1 + vatRate / 100)
+     *
+     * Böylece kısmi mal kabul yalnızca kabul edilen miktar kadar
+     * finansal yükümlülük oluşturur.
      */
     await c.query(`
       INSERT INTO "financeDocument"
@@ -263,21 +299,39 @@ export async function syncFinanceDocuments() {
         o.id,
         'Satın alma siparişi ' || o."orderNo",
         o.currency,
-        o."grandTotal",
+        SUM(
+          i."receivedQuantity"
+          * i."unitPrice"
+          * (1 + i."vatRate" / 100.0)
+        ),
         COALESCE(
-          o."expectedAt",
+          o."expectedAt"::date,
           o."createdAt"::date
         ) + 30
       FROM "purchaseOrder" o
+      JOIN "purchaseOrderItem" i
+        ON i."orderId" = o.id
       WHERE o.status <> 'CANCELLED'
-        AND o."grandTotal" > 0
+        AND i."receivedQuantity" > 0
+      GROUP BY
+        o.id,
+        o."orderNo",
+        o."supplierId",
+        o.currency,
+        o."expectedAt",
+        o."createdAt"
+      HAVING SUM(
+        i."receivedQuantity"
+        * i."unitPrice"
+        * (1 + i."vatRate" / 100.0)
+      ) > 0
       ON CONFLICT ("sourceType", "sourceId")
       DO UPDATE SET
         amount = EXCLUDED.amount,
         description = EXCLUDED.description,
+        "dueDate" = EXCLUDED."dueDate",
         "updatedAt" = now()
     `);
-
     /*
      * Finans belgelerinin ödeme durumlarını güncelle.
      */
