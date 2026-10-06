@@ -1103,6 +1103,38 @@ export async function deliverOrder(
       )
     ).rows;
 
+    /*
+     * Siparişe daha önce seri numaralı cihaz bağlanmış olmamalıdır.
+     *
+     * Teslimat tamamlanmadan önce yapılmış eski/erken cihaz
+     * bağlantıları veri tutarsızlığına yol açabilir.
+     */
+    const alreadyLinkedDevices = (
+      await client.query<any>(
+        `
+        SELECT
+          d.id,
+          d."productId",
+          d."serialNumber",
+          d.status
+        FROM "inventoryDevice" d
+        WHERE d."salesOrderId" = $1
+        FOR UPDATE
+        `,
+        [id]
+      )
+    ).rows;
+
+    if (alreadyLinkedDevices.length > 0) {
+      const serialNumbers = alreadyLinkedDevices
+        .map((device) => device.serialNumber)
+        .join(", ");
+
+      throw new Error(
+        `Bu siparişe daha önce cihaz bağlanmış: ${serialNumbers}. Teslimat devam ettirilemez.`
+      );
+    }
+
     const requestedDeviceIds = Array.isArray(input.deviceIds)
       ? [...new Set(
           input.deviceIds
@@ -1371,6 +1403,55 @@ WHERE id=$1
         deliveredAt,
         input.deliveryNote ?? null,
       ]
+    );
+    
+    /*
+     * Sipariş teslim edildiği anda finansal alacak belgesini oluştur.
+     *
+     * Finans kaydı teslimatla aynı transaction içinde oluşturulur.
+     * Böylece teslimat ile cari/finans kaydı birbirinden kopmaz.
+     */
+    await client.query(
+      `
+      INSERT INTO "financeDocument"
+      (
+        "documentNo",
+        "partyType",
+        "customerId",
+        direction,
+        "sourceType",
+        "sourceId",
+        description,
+        currency,
+        amount,
+        "dueDate"
+      )
+      SELECT
+        'FIN-SO-' || o.id,
+        'CUSTOMER',
+        o."customerId",
+        'RECEIVABLE',
+        'SALES_ORDER',
+        o.id,
+        'Satış siparişi ' || o."orderNo",
+        o.currency,
+        o."grandTotal",
+        (o."deliveredAt"::date + c."paymentTermDays")
+      FROM "salesOrder" o
+      JOIN "customer" c
+        ON c.id = o."customerId"
+      WHERE o.id = $1
+        AND o.status = 'DELIVERED'
+        AND o."deliveredAt" IS NOT NULL
+        AND o."grandTotal" > 0
+      ON CONFLICT ("sourceType", "sourceId")
+      DO UPDATE SET
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        "dueDate" = EXCLUDED."dueDate",
+        "updatedAt" = now()
+      `,
+      [id]
     );
 
     await client.query("COMMIT");
