@@ -19,22 +19,345 @@ export async function syncSourceInvoices(){
   const c=await pool.connect();
   try{
     await c.query("BEGIN");
-    const sales=(await c.query<any>(`SELECT o.* FROM "salesOrder" o WHERE o.status<>'CANCELLED' AND o."grandTotal">0`)).rows;
-    for(const o of sales){
-      const existing=(await c.query<any>(`SELECT id FROM "commercialInvoice" WHERE direction='SALE' AND "sourceType"='SALES_ORDER' AND "sourceId"=$1`,[o.id])).rows[0];
-      if(!existing){
-        const id=(await c.query<any>(`INSERT INTO "commercialInvoice"("invoiceNo",direction,"customerId","sourceType","sourceId","issueDate","dueDate",currency,subtotal,"vatTotal","grandTotal",status,notes,"accountingReady","eDocumentStatus") VALUES($1,'SALE',$2,'SALES_ORDER',$3,$4,$5,$6,$7,$8,$9,'READY',$10,true,'READY') RETURNING id`,[`TMP-S-${o.id}`,o.customerId,o.id,new Date(o.createdAt).toISOString().slice(0,10),new Date(Date.parse(o.createdAt)+30*86400000).toISOString().slice(0,10),o.currency,o.subtotal,o.vatTotal,o.grandTotal,`Satış siparişi ${o.orderNo}`])).rows[0].id;
-        await c.query(`UPDATE "commercialInvoice" SET "invoiceNo"=$2 WHERE id=$1`,[id,invoiceNo("SF",id)]);
-        await c.query(`INSERT INTO "commercialInvoiceItem"("invoiceId","productId",description,quantity,"unitPrice","vatRate","lineTotal") SELECT $1,"productId",description,quantity,"unitPrice","vatRate","lineTotal" FROM "salesOrderItem" WHERE "salesOrderId"=$2`,[id,o.id]);
+    /*
+     * SALES ORDER -> COMMERCIAL INVOICE
+     *
+     * Satış siparişi tek başına fatura doğurmaz.
+     * Fatura yalnızca sipariş fiziksel olarak teslim edildiğinde oluşur.
+     */
+    const sales = (
+      await c.query<any>(`
+        SELECT o.*
+        FROM "salesOrder" o
+        WHERE o.status = 'DELIVERED'
+          AND o."grandTotal" > 0
+      `)
+    ).rows;
+
+    for (const o of sales) {
+      const existing = (
+        await c.query<any>(
+          `
+          SELECT id
+          FROM "commercialInvoice"
+          WHERE direction = 'SALE'
+            AND "sourceType" = 'SALES_ORDER'
+            AND "sourceId" = $1
+          `,
+          [o.id]
+        )
+      ).rows[0];
+
+      if (!existing) {
+        const id = (
+          await c.query<any>(
+            `
+            INSERT INTO "commercialInvoice"
+            (
+              "invoiceNo",
+              direction,
+              "customerId",
+              "sourceType",
+              "sourceId",
+              "issueDate",
+              "dueDate",
+              currency,
+              subtotal,
+              "vatTotal",
+              "grandTotal",
+              status,
+              notes,
+              "accountingReady",
+              "eDocumentStatus"
+            )
+            VALUES
+            (
+              $1,
+              'SALE',
+              $2,
+              'SALES_ORDER',
+              $3,
+              $4,
+              $5,
+              $6,
+              $7,
+              $8,
+              $9,
+              'READY',
+              $10,
+              true,
+              'READY'
+            )
+            RETURNING id
+            `,
+            [
+              `TMP-S-${o.id}`,
+              o.customerId,
+              o.id,
+              new Date(o.updatedAt || o.createdAt)
+                .toISOString()
+                .slice(0, 10),
+              new Date(
+                Date.parse(o.updatedAt || o.createdAt) +
+                  30 * 86400000
+              )
+                .toISOString()
+                .slice(0, 10),
+              o.currency,
+              o.subtotal,
+              o.vatTotal,
+              o.grandTotal,
+              `Satış siparişi ${o.orderNo}`,
+            ]
+          )
+        ).rows[0].id;
+
+        await c.query(
+          `
+          UPDATE "commercialInvoice"
+          SET "invoiceNo" = $2
+          WHERE id = $1
+          `,
+          [id, invoiceNo("SF", id)]
+        );
+
+        await c.query(
+          `
+          INSERT INTO "commercialInvoiceItem"
+          (
+            "invoiceId",
+            "productId",
+            description,
+            quantity,
+            "unitPrice",
+            "vatRate",
+            "lineTotal"
+          )
+          SELECT
+            $1,
+            "productId",
+            description,
+            quantity,
+            "unitPrice",
+            "vatRate",
+            "lineTotal"
+          FROM "salesOrderItem"
+          WHERE "salesOrderId" = $2
+          `,
+          [id, o.id]
+        );
       }
     }
-    const purchase=(await c.query<any>(`SELECT o.* FROM "purchaseOrder" o WHERE o.status<>'CANCELLED' AND o."grandTotal">0`)).rows;
-    for(const o of purchase){
-      const existing=(await c.query<any>(`SELECT id FROM "commercialInvoice" WHERE direction='PURCHASE' AND "sourceType"='PURCHASE_ORDER' AND "sourceId"=$1`,[o.id])).rows[0];
-      if(!existing){
-        const id=(await c.query<any>(`INSERT INTO "commercialInvoice"("invoiceNo",direction,"supplierId","sourceType","sourceId","issueDate","dueDate",currency,subtotal,"vatTotal","grandTotal",status,notes,"accountingReady","eDocumentStatus") VALUES($1,'PURCHASE',$2,'PURCHASE_ORDER',$3,$4,$5,$6,$7,$8,$9,'READY',$10,true,'READY') RETURNING id`,[`TMP-P-${o.id}`,o.supplierId,o.id,new Date(o.createdAt).toISOString().slice(0,10),o.expectedAt||new Date(Date.parse(o.createdAt)+30*86400000).toISOString().slice(0,10),o.currency,o.subtotal,o.vatTotal,o.grandTotal,`Satın alma siparişi ${o.orderNo}`])).rows[0].id;
-        await c.query(`UPDATE "commercialInvoice" SET "invoiceNo"=$2 WHERE id=$1`,[id,invoiceNo("AF",id)]);
-        await c.query(`INSERT INTO "commercialInvoiceItem"("invoiceId","productId",description,quantity,"unitPrice","vatRate","lineTotal") SELECT $1,"productId",description,quantity,"unitPrice","vatRate","lineTotal" FROM "purchaseOrderItem" WHERE "orderId"=$2`,[id,o.id]);
+
+    /*
+     * PURCHASE ORDER -> COMMERCIAL INVOICE
+     *
+     * Satın alma siparişi verilmesi tek başına alış faturası oluşturmaz.
+     * Fatura yalnızca fiziksel olarak kabul edilmiş miktar kadar oluşur.
+     *
+     * Kısmi mal kabulde aynı commercialInvoice korunur ve kabul edilen
+     * toplam miktara göre güncellenir.
+     */
+    const purchase = (
+      await c.query<any>(`
+        SELECT
+          o.id,
+          o."orderNo",
+          o."supplierId",
+          o.currency,
+          o."createdAt",
+          o."expectedAt",
+          SUM(
+            i."receivedQuantity" * i."unitPrice"
+          ) AS subtotal,
+          SUM(
+            i."receivedQuantity"
+            * i."unitPrice"
+            * i."vatRate" / 100.0
+          ) AS "vatTotal",
+          SUM(
+            i."receivedQuantity"
+            * i."unitPrice"
+            * (1 + i."vatRate" / 100.0)
+          ) AS "grandTotal"
+        FROM "purchaseOrder" o
+        JOIN "purchaseOrderItem" i
+          ON i."orderId" = o.id
+        WHERE o.status <> 'CANCELLED'
+          AND i."receivedQuantity" > 0
+        GROUP BY
+          o.id,
+          o."orderNo",
+          o."supplierId",
+          o.currency,
+          o."createdAt",
+          o."expectedAt"
+        HAVING SUM(
+          i."receivedQuantity"
+          * i."unitPrice"
+          * (1 + i."vatRate" / 100.0)
+        ) > 0
+      `)
+    ).rows;
+
+    for (const o of purchase) {
+      const existing = (
+        await c.query<any>(
+          `
+          SELECT id, status
+          FROM "commercialInvoice"
+          WHERE direction = 'PURCHASE'
+            AND "sourceType" = 'PURCHASE_ORDER'
+            AND "sourceId" = $1
+          FOR UPDATE
+          `,
+          [o.id]
+        )
+      ).rows[0];
+
+      let invoiceId: number;
+
+      if (!existing) {
+        invoiceId = (
+          await c.query<any>(
+            `
+            INSERT INTO "commercialInvoice"
+            (
+              "invoiceNo",
+              direction,
+              "supplierId",
+              "sourceType",
+              "sourceId",
+              "issueDate",
+              "dueDate",
+              currency,
+              subtotal,
+              "vatTotal",
+              "grandTotal",
+              status,
+              notes,
+              "accountingReady",
+              "eDocumentStatus"
+            )
+            VALUES
+            (
+              $1,
+              'PURCHASE',
+              $2,
+              'PURCHASE_ORDER',
+              $3,
+              $4,
+              $5,
+              $6,
+              $7,
+              $8,
+              $9,
+              'READY',
+              $10,
+              true,
+              'READY'
+            )
+            RETURNING id
+            `,
+            [
+              `TMP-P-${o.id}`,
+              o.supplierId,
+              o.id,
+              new Date(o.createdAt).toISOString().slice(0, 10),
+              o.expectedAt
+                ? new Date(o.expectedAt).toISOString().slice(0, 10)
+                : new Date(
+                    Date.parse(o.createdAt) + 30 * 86400000
+                  )
+                    .toISOString()
+                    .slice(0, 10),
+              o.currency,
+              Number(o.subtotal),
+              Number(o.vatTotal),
+              Number(o.grandTotal),
+              `Satın alma siparişi ${o.orderNo}`,
+            ]
+          )
+        ).rows[0].id;
+
+        await c.query(
+          `
+          UPDATE "commercialInvoice"
+          SET "invoiceNo" = $2
+          WHERE id = $1
+          `,
+          [invoiceId, invoiceNo("AF", invoiceId)]
+        );
+      } else {
+        invoiceId = Number(existing.id);
+
+        /*
+         * Dış sisteme gönderilmiş faturanın tutarını sessizce değiştirmiyoruz.
+         * SYNCED kayıtlar muhasebe belgesidir ve immutable kabul edilir.
+         */
+        if (existing.status !== "SYNCED") {
+          await c.query(
+            `
+            UPDATE "commercialInvoice"
+            SET
+              "supplierId" = $2,
+              currency = $3,
+              subtotal = $4,
+              "vatTotal" = $5,
+              "grandTotal" = $6,
+              notes = $7,
+              "updatedAt" = now()
+            WHERE id = $1
+            `,
+            [
+              invoiceId,
+              o.supplierId,
+              o.currency,
+              Number(o.subtotal),
+              Number(o.vatTotal),
+              Number(o.grandTotal),
+              `Satın alma siparişi ${o.orderNo}`,
+            ]
+          );
+
+          await c.query(
+            `
+            DELETE FROM "commercialInvoiceItem"
+            WHERE "invoiceId" = $1
+            `,
+            [invoiceId]
+          );
+        }
+      }
+
+      if (!existing || existing.status !== "SYNCED") {
+        await c.query(
+          `
+          INSERT INTO "commercialInvoiceItem"
+          (
+            "invoiceId",
+            "productId",
+            description,
+            quantity,
+            "unitPrice",
+            "vatRate",
+            "lineTotal"
+          )
+          SELECT
+            $1,
+            i."productId",
+            i.description,
+            i."receivedQuantity",
+            i."unitPrice",
+            i."vatRate",
+            i."receivedQuantity" * i."unitPrice"
+          FROM "purchaseOrderItem" i
+          WHERE i."orderId" = $2
+            AND i."receivedQuantity" > 0
+          ORDER BY i.id
+          `,
+          [invoiceId, o.id]
+        );
       }
     }
     const services=(await c.query<any>(`SELECT sr.*,c.name AS "customerName" FROM "serviceRecord" sr JOIN customer c ON c.id=sr."customerId" WHERE sr."serviceType"='PAID' AND sr."grandTotal">0 AND sr.status NOT IN ('CANCELLED')`)).rows;
